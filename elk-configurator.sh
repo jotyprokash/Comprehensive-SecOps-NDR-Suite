@@ -87,9 +87,11 @@ if prompt_user "Do you want to install Elasticsearch?"; then
     sudo sed -i '/^#cluster.name:/c\cluster.name: sample-cluster' /etc/elasticsearch/elasticsearch.yml
     sudo sed -i '/^#node.name:/c\node.name: elasticsearch-node' /etc/elasticsearch/elasticsearch.yml
     sudo sed -i '/^#network.host:/c\network.host: 0.0.0.0' /etc/elasticsearch/elasticsearch.yml
-    sudo sed -i '/^#xpack.security.enabled:/c\xpack.security.enabled: false' /etc/elasticsearch/elasticsearch.yml
+    sudo sed -i '/xpack\.security\.enabled:/c\xpack.security.enabled: false' /etc/elasticsearch/elasticsearch.yml
 
-    # Restart Elasticsearch to apply changes
+
+
+  # Restart Elasticsearch to apply changes
     sudo systemctl restart elasticsearch
 
     # Verify Elasticsearch status
