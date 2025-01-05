@@ -193,55 +193,120 @@ EOF'
   fi
 fi
 
-# Step 7: Install Filebeat
+# Install and configure Filebeat
 if prompt_user "Do you want to install Filebeat?"; then
-  echo -e "${cyan}Installing Filebeat...${no_color}"
-  sudo apt install -y filebeat > /dev/null 2>&1 &
-  show_loading $!
-  
-  if [ $? -eq 0 ]; then
-    # Enable and start Filebeat service
-    sudo systemctl enable filebeat && sudo systemctl start filebeat
-
-    echo -e "${cyan}Configuring Filebeat...${no_color}"
+    echo -e "${cyan}Installing Filebeat...${no_color}"
+    sudo apt install -y filebeat > /dev/null 2>&1 &
+    show_loading $!
     
-    # Modify Filebeat configuration to ship data to Logstash
-    sudo sed -i 's|^output.elasticsearch:|#output.elasticsearch:|' /etc/filebeat/filebeat.yml
-    sudo sed -i 's|^  hosts: \["localhost:9200"\]|#  hosts: ["localhost:9200"]|' /etc/filebeat/filebeat.yml
-    sudo sed -i 's|^#output.logstash:|output.logstash:|' /etc/filebeat/filebeat.yml
-    sudo sed -i 's|^#  hosts: \["localhost:5044"\]|  hosts: ["localhost:5044"]|' /etc/filebeat/filebeat.yml
+    if [ $? -eq 0 ]; then
+        echo -e "${cyan}Configuring Filebeat...${no_color}"
+        
+        # Stop Filebeat if it's running
+        sudo systemctl stop filebeat > /dev/null 2>&1
+        
+        # Backup original configuration
+        sudo cp /etc/filebeat/filebeat.yml /etc/filebeat/filebeat.yml.bak
+        
+        # Configure Filebeat to ship data to Logstash
+        sudo tee /etc/filebeat/filebeat.yml > /dev/null << EOL
+filebeat.inputs:
+- type: filestream
+  id: my-filestream-id
+  enabled: true
+  paths:
+    - /var/log/*.log
+    - /var/log/syslog
 
-    # Enable the system module
-    sudo filebeat modules enable system
+filebeat.config.modules:
+  path: \${path.config}/modules.d/*.yml
+  reload.enabled: false
 
-    # Set up ingest pipelines for the system module
-    sudo filebeat setup --pipelines --modules system > /dev/null 2>&1
+setup.template.settings:
+  index.number_of_shards: 1
 
-    # Set up index management
-    sudo filebeat setup --index-management -E output.logstash.enabled=false -E 'output.elasticsearch.hosts=["localhost:9200"]' > /dev/null 2>&1
+output.logstash:
+  hosts: ["localhost:5044"]
+  
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+EOL
 
-    # Load Kibana dashboards
-    sudo filebeat setup -E output.logstash.enabled=false -E 'output.elasticsearch.hosts=["localhost:9200"]' -E setup.kibana.host=localhost:5601 > /dev/null 2>&1
+        # Enable system module and configure filesets
+        echo -e "${cyan}Enabling and configuring system module...${no_color}"
+        sudo filebeat modules disable system > /dev/null 2>&1  # Disable first to ensure clean state
+        sudo filebeat modules enable system > /dev/null 2>&1
+        
+        # Configure system module filesets
+        sudo tee /etc/filebeat/modules.d/system.yml > /dev/null << EOL
+- module: system
+  syslog:
+    enabled: true
+  auth:
+    enabled: true
+EOL
 
-    # Restart Filebeat to apply changes
-    sudo systemctl restart filebeat
-
-    # Verify Filebeat status
-    if sudo systemctl status filebeat | grep -q "active (running)"; then
-      echo -e "${green}Filebeat installed and configured successfully.${no_color}"
+        # Test configuration
+        echo -e "${cyan}Testing Filebeat configuration...${no_color}"
+        if sudo filebeat test config -c /etc/filebeat/filebeat.yml; then
+            # Set up ingest pipelines for the system module
+            echo -e "${cyan}Setting up ingest pipelines...${no_color}"
+            sudo filebeat setup --pipelines --modules system > /dev/null 2>&1
+            
+            # Set up index management
+            echo -e "${cyan}Setting up index management...${no_color}"
+            sudo filebeat setup --index-management -E output.logstash.enabled=false \
+                -E 'output.elasticsearch.hosts=["localhost:9200"]' > /dev/null 2>&1
+            
+            # Load Kibana dashboards
+            echo -e "${cyan}Loading Kibana dashboards...${no_color}"
+            sudo filebeat setup -E output.logstash.enabled=false \
+                -E 'output.elasticsearch.hosts=["localhost:9200"]' \
+                -E setup.kibana.host=localhost:5601 > /dev/null 2>&1
+            
+            # Start and enable Filebeat service
+            echo -e "${cyan}Starting and enabling Filebeat service...${no_color}"
+            
+            # Clear any previous startup failures
+            sudo systemctl reset-failed filebeat.service > /dev/null 2>&1
+            
+            # Start Filebeat
+            sudo systemctl start filebeat
+            
+            # Wait a moment to ensure proper startup
+            sleep 5
+            
+            # Check if service is running
+            if sudo systemctl is-active --quiet filebeat; then
+                sudo systemctl enable filebeat
+                echo -e "${green}Filebeat installed and configured successfully.${no_color}"
+                echo -e "${cyan}You can check Filebeat status with: sudo systemctl status filebeat${no_color}"
+            else
+                echo -e "${red}Filebeat service failed to start. Checking logs...${no_color}"
+                sudo journalctl -u filebeat --no-pager -n 20
+                echo -e "${yellow}Restoring original configuration...${no_color}"
+                sudo cp /etc/filebeat/filebeat.yml.bak /etc/filebeat/filebeat.yml
+                exit 1
+            fi
+        else
+            echo -e "${red}Filebeat configuration validation failed. Restoring backup...${no_color}"
+            sudo cp /etc/filebeat/filebeat.yml.bak /etc/filebeat/filebeat.yml
+            exit 1
+        fi
     else
-      echo -e "${red}Filebeat installation or configuration failed. Please check the logs for errors.${no_color}"
-      exit 1
+        echo -e "${red}Failed to install Filebeat. Please check your internet connection and try again.${no_color}"
+        exit 1
     fi
-  else
-    echo -e "${red}Failed to install Filebeat. Exiting.${no_color}" && exit 1
-  fi
 fi
+
 
 # Final message
 echo -e "${green}All selected ELK stack components have been successfully installed and configured for seamless data visualization!${no_color}"
-
-
 
 
 
